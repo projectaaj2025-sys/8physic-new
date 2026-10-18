@@ -49857,6 +49857,16 @@ function getLevelConfig(levelId) {
     return LEVELS_CONFIG[levelId - 1] || LEVELS_CONFIG[0];
 }
 
+// Доступен ли урок на этом устройстве: пользовательский урок должен быть
+// импортирован, иначе его нельзя открыть (показываем понятное сообщение).
+function isLevelAvailable(levelId) {
+    if (typeof levelId === "string" && levelId.indexOf("custom:") === 0) {
+        return (Storage.getCustomLessons() || []).some(l => "custom:" + l.id === levelId);
+    }
+    const n = parseInt(levelId, 10);
+    return Number.isFinite(n) && n >= 1 && n <= LEVELS_CONFIG.length;
+}
+
 function getLevelNameKey(levelId) {
     return `level${levelId}Name`;
 }
@@ -50177,6 +50187,9 @@ const LOCALES = {
         noAssignments: "Пока нет назначений.",
         assignmentCompleted: "выполнено",
         assignmentPending: "не выполнено",
+        assignmentInProgress: "В процессе",
+        assignmentLastAttempt: "Последняя попытка: {0}",
+        lessonMissing: "Урок недоступен на этом устройстве. Импортируйте пользовательский урок или попросите учителя поделиться им.",
         assignmentNoNote: "без комментария",
         openAssignment: "Открыть",
         deleteAssignmentConfirm: "Удалить это назначение?",
@@ -50685,6 +50698,9 @@ const LOCALES = {
         noAssignments: "No assignments yet.",
         assignmentCompleted: "completed",
         assignmentPending: "not completed",
+        assignmentInProgress: "In progress",
+        assignmentLastAttempt: "Last attempt: {0}",
+        lessonMissing: "The lesson is not available on this device. Import the custom lesson or ask the teacher to share it.",
         assignmentNoNote: "no note",
         openAssignment: "Open",
         deleteAssignmentConfirm: "Delete this assignment?",
@@ -51190,6 +51206,9 @@ const LOCALES = {
         noAssignments: "Әзірге тағайындау жоқ.",
         assignmentCompleted: "орындалды",
         assignmentPending: "орындалмады",
+        assignmentInProgress: "Орындалуда",
+        assignmentLastAttempt: "Соңғы әрекет: {0}",
+        lessonMissing: "Сабақ бұл құрылғыда қолжетімсіз. Пайдаланушы сабағын импорттаңыз немесе мұғалімнен бөлісуді сұраңыз.",
         assignmentNoNote: "түсініктеме жоқ",
         openAssignment: "Ашу",
         deleteAssignmentConfirm: "Бұл тағайындауды өшіру керек пе?",
@@ -51782,27 +51801,42 @@ const Storage = {
         return this.getAssignments().filter(a => this.assignmentMatchesPlayer(a, current));
     },
 
-    getAssignmentResult(assignment) {
+    // Совпадает ли запись истории с назначением (уровень, срок, ученик).
+    // Код назначения ограничивает результат этим назначением учителя.
+    assignmentRunMatches(assignment, r, assignmentCode) {
         const level = String(assignment.levelId);
+        if (String(r.level) !== level) return false;
         const assignedAt = new Date(assignment.assignedAt || 0).getTime();
+        const playedAt = new Date(r.date || 0).getTime();
+        if (Number.isFinite(assignedAt) && assignedAt > 0 && Number.isFinite(playedAt) && playedAt < assignedAt) return false;
+        const sameId = !!assignment.playerId && !!r.playerId && String(r.playerId) === String(assignment.playerId);
+        const samePlayerCode = !!assignment.studentCode && !!r.playerCode && String(r.playerCode).toUpperCase() === String(assignment.studentCode).toUpperCase();
+        const sameName = !!assignment.studentName && this.normalizeName(r.name) === this.normalizeName(assignment.studentName);
+        const conflictingId = !!assignment.playerId && !!r.playerId && String(r.playerId) !== String(assignment.playerId);
+        const conflictingCode = !!assignment.studentCode && !!r.playerCode && String(r.playerCode).toUpperCase() !== String(assignment.studentCode).toUpperCase();
+        const samePerson = sameId || samePlayerCode || (!conflictingId && !conflictingCode && sameName);
+        const sameCode = !!assignmentCode && assignmentCode === this.normalizeAssignmentCode(r.assignmentCode);
+        // A code limits the result to this teacher's assignment. For an
+        // individual assignment the code itself is enough; class rows still
+        // require a matching student identity (short code, ID, or safe name).
+        const isClassRow = !!assignment.classId || !!assignment.className;
+        return sameCode ? (!isClassRow || samePerson) : samePerson;
+    },
+
+    getAssignmentResult(assignment) {
         const assignmentCode = this.normalizeAssignmentCode(assignment.assignmentCode);
-        return this.getHistory().slice().reverse().find(r => {
-            if (!r.victory || String(r.level) !== level) return false;
-            const playedAt = new Date(r.date || 0).getTime();
-            if (Number.isFinite(assignedAt) && assignedAt > 0 && Number.isFinite(playedAt) && playedAt < assignedAt) return false;
-            const sameId = !!assignment.playerId && !!r.playerId && String(r.playerId) === String(assignment.playerId);
-            const samePlayerCode = !!assignment.studentCode && !!r.playerCode && String(r.playerCode).toUpperCase() === String(assignment.studentCode).toUpperCase();
-            const sameName = !!assignment.studentName && this.normalizeName(r.name) === this.normalizeName(assignment.studentName);
-            const conflictingId = !!assignment.playerId && !!r.playerId && String(r.playerId) !== String(assignment.playerId);
-            const conflictingCode = !!assignment.studentCode && !!r.playerCode && String(r.playerCode).toUpperCase() !== String(assignment.studentCode).toUpperCase();
-            const samePerson = sameId || samePlayerCode || (!conflictingId && !conflictingCode && sameName);
-            const sameCode = !!assignmentCode && assignmentCode === this.normalizeAssignmentCode(r.assignmentCode);
-            // A code limits the result to this teacher's assignment. For an
-            // individual assignment the code itself is enough; class rows still
-            // require a matching student identity (short code, ID, or safe name).
-            const isClassRow = !!assignment.classId || !!assignment.className;
-            return sameCode ? (!isClassRow || samePerson) : samePerson;
-        }) || null;
+        return this.getHistory().slice().reverse().find(r =>
+            r.victory && this.assignmentRunMatches(assignment, r, assignmentCode)
+        ) || null;
+    },
+
+    // Последняя попытка по назначению, включая неудачные: так «В процессе»
+    // показывается с результатом последней попытки, а не только победы.
+    getAssignmentLastAttempt(assignment) {
+        const assignmentCode = this.normalizeAssignmentCode(assignment.assignmentCode);
+        return this.getHistory().slice().reverse().find(r =>
+            this.assignmentRunMatches(assignment, r, assignmentCode)
+        ) || null;
     },
 
     isAssignmentCompleted(assignment) {
@@ -52300,6 +52334,8 @@ const Teacher = {
         }
         container.innerHTML = assignments.map(assignment => {
             const result = Storage.getAssignmentResult(assignment);
+            // Неудачные попытки — «В процессе» с результатом последней попытки.
+            const lastAttempt = result ? null : Storage.getAssignmentLastAttempt(assignment);
             const completed = !!result;
             const target = assignment.studentName
                 ? escapeHtml(assignment.studentName)
@@ -52310,13 +52346,18 @@ const Teacher = {
                 assignment.note ? escapeHtml(assignment.note) : "",
                 formatRecordDate(assignment.assignedAt)
             ].filter(Boolean).join(" • ");
+            const statusHtml = completed
+                ? "✅ " + I18n.t("assignmentCompleted")
+                : lastAttempt ? "⏳ " + I18n.t("assignmentInProgress") : "🕘 " + I18n.t("assignmentPending");
             const resultLine = result
                 ? `<div class="assignment-item-result">${I18n.t("assignmentResult", result.score || 0, result.accuracy || 0)} · ${I18n.t("assignmentPassedAt", formatRecordDate(result.date))}</div>`
-                : "";
+                : lastAttempt
+                    ? `<div class="assignment-item-result">${I18n.t("assignmentResult", lastAttempt.score || 0, lastAttempt.accuracy || 0)} · ${I18n.t("assignmentLastAttempt", formatRecordDate(lastAttempt.date))}</div>`
+                    : "";
             return `
                 <div class="assignment-item">
                     <div class="assignment-item-main">
-                        <div class="assignment-item-title">${target} — ${completed ? "✅ " + I18n.t("assignmentCompleted") : "🕘 " + I18n.t("assignmentPending")}</div>
+                        <div class="assignment-item-title">${target} — ${statusHtml}</div>
                         <div class="assignment-item-meta">${meta}</div>
                         <div class="assignment-item-meta">🔑 ${escapeHtml(I18n.t("assignmentCodePrefix"))}: ${escapeHtml(assignment.assignmentCode || "—")}</div>
                         ${(assignment.studentCode || assignment.playerId) ? `<div class="assignment-item-meta">${escapeHtml(I18n.t("playerIdLabel"))}: ${escapeHtml(assignment.studentCode || assignment.playerId)}</div>` : ""}
@@ -55381,6 +55422,8 @@ function renderStudentAssignments() {
     }
     list.innerHTML = assignments.map(assignment => {
         const result = Storage.getAssignmentResult(assignment);
+        // Неудачные попытки — «В процессе» с результатом последней попытки.
+        const lastAttempt = result ? null : Storage.getAssignmentLastAttempt(assignment);
         const completed = !!result;
         const rawId = String(assignment.levelId);
         const target = escapeHtml(levelTitleText(assignment.levelId));
@@ -55389,13 +55432,18 @@ function renderStudentAssignments() {
             assignment.note ? `💬 ${escapeHtml(assignment.note)}` : `💬 ${I18n.t("assignmentNoNote")}`,
             formatRecordDate(assignment.assignedAt)
         ].filter(Boolean).join(" · ");
+        const statusHtml = completed
+            ? "✅ " + I18n.t("assignmentCompleted")
+            : lastAttempt ? "⏳ " + I18n.t("assignmentInProgress") : "🕘 " + I18n.t("assignmentPending");
         const resultLine = result
             ? `<div class="student-assignment-meta assignment-item-result">${I18n.t("assignmentResult", result.score || 0, result.accuracy || 0)} · ${I18n.t("assignmentPassedAt", formatRecordDate(result.date))}</div>`
-            : "";
+            : lastAttempt
+                ? `<div class="student-assignment-meta assignment-item-result">${I18n.t("assignmentResult", lastAttempt.score || 0, lastAttempt.accuracy || 0)} · ${I18n.t("assignmentLastAttempt", formatRecordDate(lastAttempt.date))}</div>`
+                : "";
         return `<article class="student-assignment-card ${completed ? "completed" : ""}">
             <div class="student-assignment-main">
                 <div class="student-assignment-level">${target}</div>
-                <div class="student-assignment-status">${completed ? "✅ " + I18n.t("assignmentCompleted") : "🕘 " + I18n.t("assignmentPending")}</div>
+                <div class="student-assignment-status">${statusHtml}</div>
                 <div class="student-assignment-meta">${details}</div>
                 ${resultLine}
             </div>
@@ -55406,7 +55454,11 @@ function renderStudentAssignments() {
         button.addEventListener("click", () => {
             const raw = button.dataset.studentAssignmentStart;
             const id = raw.indexOf("custom:") === 0 ? raw : parseInt(raw, 10);
-            if (getLevelConfig(id)) Game.startLevel(id, button.dataset.studentAssignmentCode || "");
+            if (!isLevelAvailable(id)) {
+                showNotification(I18n.t("lessonMissing"), "warning");
+                return;
+            }
+            Game.startLevel(id, button.dataset.studentAssignmentCode || "");
         });
     });
 }
@@ -55519,7 +55571,11 @@ function showLevelSelect() {
         button.addEventListener("click", () => {
             const raw = button.dataset.assignmentStart;
             const id = raw.indexOf("custom:") === 0 ? raw : parseInt(raw, 10);
-            if (getLevelConfig(id)) Game.startLevel(id);
+            if (!isLevelAvailable(id)) {
+                showNotification(I18n.t("lessonMissing"), "warning");
+                return;
+            }
+            Game.startLevel(id);
         });
     });
 
@@ -57106,6 +57162,10 @@ Object.assign(UI.ru, {
     asQuickChooseLesson: "Выберите урок",
     asQuickCreate: "Создать и открыть QR / ссылку",
     asQuickNoStudents: "В этом классе пока нет учеников",
+    asWizardNoStudents: "Среди выбранных классов нет учеников",
+    asLinkBroken: "Ссылка повреждена или недействительна",
+    asLessonMissing: "Урок недоступен на этом устройстве. Импортируйте пользовательский урок или попросите учителя поделиться им.",
+    asResultBad: "Код результата из ссылки не распознан",
     asNewClass: "+ Класс",
     asTransfer: "⇅ Экспорт / импорт",
     asSearch: "Ученик, класс или код",
@@ -57314,6 +57374,10 @@ Object.assign(UI.en, {
     asQuickChooseLesson: "Choose a lesson",
     asQuickCreate: "Create and open QR / link",
     asQuickNoStudents: "This class has no students yet",
+    asWizardNoStudents: "None of the selected classes have students",
+    asLinkBroken: "The link is broken or invalid",
+    asLessonMissing: "The lesson is not available on this device. Import the custom lesson or ask the teacher to share it.",
+    asResultBad: "The result code in the link was not recognized",
     asNewClass: "+ Class",
     asTransfer: "⇅ Export / import",
     asSearch: "Student, class or code",
@@ -57523,6 +57587,10 @@ Object.assign(UI.kk, {
     asQuickChooseLesson: "Сабақты таңдаңыз",
     asQuickCreate: "Жасау және QR / сілтемені ашу",
     asQuickNoStudents: "Бұл сыныпта әзірге оқушы жоқ",
+    asWizardNoStudents: "Таңдалған сыныптарда оқушы жоқ",
+    asLinkBroken: "Сілтеме зақымдалған немесе жарамсыз",
+    asLessonMissing: "Сабақ бұл құрылғыда қолжетімсіз. Пайдаланушы сабағын импорттаңыз немесе мұғалімнен бөлісуді сұраңыз.",
+    asResultBad: "Сілтемедегі нәтиже коды танылмады",
     asNewClass: "+ Сынып",
     asTransfer: "⇅ Экспорт / импорт",
     asSearch: "Оқушы, сынып немесе код",
@@ -62718,7 +62786,12 @@ Object.assign(RPG, {
                 const raw = dueOpen.getAttribute("data-rpg-due-open");
                 const id = raw.indexOf("custom:") === 0 ? raw : parseInt(raw, 10);
                 const code = dueOpen.getAttribute("data-rpg-due-code") || "";
-                if (typeof getLevelConfig === "function" && getLevelConfig(id)) Game.startLevel(id, code);
+                if (typeof isLevelAvailable === "function" && !isLevelAvailable(id)) {
+                    // Понятное сообщение вместо молчаливого отказа: урока нет на устройстве.
+                    if (typeof RPG !== "undefined") RPG.toast("⚠️", rpgT("asLessonMissing"), "", "warning");
+                    return;
+                }
+                Game.startLevel(id, code);
                 return;
             }
         });
@@ -65060,7 +65133,7 @@ const RPG_HQ_KEYS = {
 
 const RPG_HQ_ALPH = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const RPG_HQ_DAY = 24 * 60 * 60 * 1000;
-const RPG_HQ_CODE_RE = /R1-[A-Z0-9]+-[A-Z0-9]+-[A-Z0-9]+-[VD]-\d{1,3}-\d{1,3}-\d{1,5}-\d{6}(?:-G[A-Z0-9]{5})?-[A-Z0-9]{4}/;
+const RPG_HQ_CODE_RE = /R[12]-[A-Z0-9]+-[A-Z0-9]+-[A-Z0-9]+-[VD]-\d{1,3}-\d{1,3}-\d{1,5}-\d{6}(?:-G[A-Z0-9]{5})?(?:-A[A-Z0-9]{3,8})?-[A-Z0-9]{4}/;
 
 /* ---------------- МЕЛКИЕ УТИЛИТЫ ---------------- */
 
@@ -65484,6 +65557,11 @@ const TeacherHQ = {
 
     /* ---------- КОДЫ РЕЗУЛЬТАТОВ (E2) ---------- */
 
+    /* Стабильный токен прогона: G + хеш id записи истории. */
+    runTokenOf(entry) {
+        return entry.runToken || (entry.runId ? "G" + hqHash(entry.runId, 5) : "");
+    },
+
     buildCode(entry) {
         const studentCode = String(entry.studentCode || "").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 10) || "X0";
         const nameHash = entry.nameHash || hqNameHash(entry.name);
@@ -65495,9 +65573,16 @@ const TeacherHQ = {
         const date = hqDateToken(entry.date);
         // Include a stable per-run token so two identical games on the same day
         // remain distinct in the teacher's complete history.
-        const runToken = entry.runToken || (entry.runId ? "G" + hqHash(entry.runId, 5) : "");
-        const payloadParts = ["R1", studentCode, nameHash, lvl, win, solved, attempted, score, date];
+        const runToken = this.runTokenOf(entry);
+        const assignCode = entry.assignmentCode
+            ? String(Storage.normalizeAssignmentCode(entry.assignmentCode) || "").replace(/[^A-Z0-9]/g, "").slice(0, 8)
+            : "";
+        // R2 — новый формат: внутри кода есть код назначения.
+        // R1 — старый формат (без назначения) — остаётся совместимым.
+        const version = assignCode ? "R2" : "R1";
+        const payloadParts = [version, studentCode, nameHash, lvl, win, solved, attempted, score, date];
         if (runToken) payloadParts.push(runToken);
+        if (assignCode) payloadParts.push("A" + assignCode);
         const payload = payloadParts.join("-");
         return payload + "-" + hqHash(payload, 4);
     },
@@ -65508,8 +65593,21 @@ const TeacherHQ = {
         if (!match) return { ok: false, raw: String(raw || ""), reason: "format" };
         const code = match[0];
         const parts = code.split("-");
-        const hasRunToken = parts.length === 11 && /^G[A-Z0-9]{5}$/.test(parts[9]);
-        if (parts.length !== 10 && !hasRunToken) return { ok: false, raw: code, reason: "format" };
+        if (parts[0] !== "R1" && parts[0] !== "R2") return { ok: false, raw: code, reason: "format" };
+        let runToken = "";
+        let assignmentCode = "";
+        const extra = parts.slice(9, -1);
+        for (const part of extra) {
+            if (/^G[A-Z0-9]{5}$/.test(part)) {
+                if (runToken) return { ok: false, raw: code, reason: "format" };
+                runToken = part;
+            } else if (/^A[A-Z0-9]{3,8}$/.test(part)) {
+                if (assignmentCode) return { ok: false, raw: code, reason: "format" };
+                assignmentCode = part.slice(1);
+            } else {
+                return { ok: false, raw: code, reason: "format" };
+            }
+        }
         const payload = parts.slice(0, -1).join("-");
         const check = parts[parts.length - 1];
         if (hqHash(payload, 4) !== check) return { ok: false, raw: code, reason: "checksum" };
@@ -65523,7 +65621,8 @@ const TeacherHQ = {
             attempted: parseInt(parts[6], 10) || 0,
             score: parseInt(parts[7], 10) || 0,
             date: hqFromDateToken(parts[8]),
-            runToken: hasRunToken ? parts[9] : ""
+            runToken,
+            assignmentCode
         };
         entry.levelId = this.resolveToken(entry.levelToken);
         entry.accuracy = hqPct(entry.solved, entry.attempted);
@@ -65535,7 +65634,7 @@ const TeacherHQ = {
         String(text || "").split(/[\n\r]+/).forEach(line => {
             if (!line.trim()) return;
             const up = line.toUpperCase().replace(/[|.:;]/g, "-");
-            const match = up.match(/R1-[A-Z0-9-]{12,90}/);
+            const match = up.match(/R[12]-[A-Z0-9-]{12,90}/);
             if (!match) return;
             out.push(match[0].replace(/[^A-Z0-9-]/g, "").replace(/-+$/, ""));
         });
@@ -65565,16 +65664,64 @@ const TeacherHQ = {
         return copy;
     },
 
+    /* Подпись попытки без учёта версии кода (R1/R2), кода назначения и
+       токена прогона — нужна, чтобы одна и та же игра не попадала в
+       кабинет дважды при переходе со старых кодов R1 на новые R2. */
+    resultSignature(entry) {
+        return [
+            String(entry.studentCode || "").toUpperCase(),
+            entry.nameHash || hqNameHash(entry.name || ""),
+            String(entry.levelToken || this.levelToken(entry.levelId)),
+            entry.victory ? "V" : "D",
+            Math.round(hqNum(entry.solved)),
+            Math.round(hqNum(entry.attempted)),
+            Math.round(hqNum(entry.score)),
+            hqDateToken(entry.date)
+        ].join("|");
+    },
+
     addResults(entries) {
         const list = this.allResults();
         const seen = new Set(list.map(r => r.code));
+        const tokenSet = new Set();
+        const sigMap = new Map();
+        const indexEntry = e => {
+            const token = this.runTokenOf(e);
+            const sig = this.resultSignature(e);
+            let slot = sigMap.get(sig);
+            if (!slot) {
+                slot = { tokens: new Set(), tokenless: 0 };
+                sigMap.set(sig, slot);
+            }
+            if (token) {
+                slot.tokens.add(token);
+                tokenSet.add(token);
+            } else {
+                slot.tokenless += 1;
+            }
+        };
+        list.forEach(indexEntry);
         let added = 0;
         let dup = 0;
         entries.forEach(raw => {
             if (!raw || !raw.code) return;
-            if (seen.has(raw.code)) { dup += 1; return; }
+            const token = this.runTokenOf(raw);
+            const sig = this.resultSignature(raw);
+            const slot = sigMap.get(sig);
+            // Тот же код, тот же токен прогона или «та же игра» в другом
+            // формате кода (R1 ↔ R2) — считаем повтором.
+            const isDup = seen.has(raw.code)
+                || (!!token && tokenSet.has(token))
+                || (!!slot && (token
+                    ? (slot.tokens.has(token) || slot.tokenless > 0)
+                    : (slot.tokens.size > 0 || slot.tokenless > 0)));
+            if (isDup) {
+                dup += 1;
+                return;
+            }
             seen.add(raw.code);
             list.push(this.normalizeResult(Object.assign({}, raw, { importedAt: new Date().toISOString() })));
+            indexEntry(raw);
             added += 1;
         });
         list.sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")));
@@ -65740,10 +65887,15 @@ const TeacherHQ = {
         const own = (studentResults || []).filter(r =>
             r.levelToken === token && new Date(r.date || 0).getTime() >= assignedAt
         );
-        if (own.some(r => r.victory)) return { status: "done", result: own.find(r => r.victory) };
+        const latest = own.reduce((acc, r) =>
+            !acc || new Date(r.date || 0).getTime() >= new Date(acc.date || 0).getTime() ? r : acc, null);
+        const latestVictory = own.reduce((acc, r) =>
+            r.victory && (!acc || new Date(r.date || 0).getTime() >= new Date(acc.date || 0).getTime()) ? r : acc, null);
+        if (latestVictory) return { status: "done", result: latestVictory };
         const due = assignment.dueAt ? new Date(assignment.dueAt).getTime() : 0;
-        if (due && due < Date.now()) return { status: "overdue", result: own[0] || null };
-        if (own.length) return { status: "started", result: own[0] };
+        // Неудачные попытки — «В процессе», показываем результат последней попытки.
+        if (due && due < Date.now()) return { status: "overdue", result: latest };
+        if (own.length) return { status: "started", result: latest };
         return { status: "pending", result: null };
     },
 
@@ -66407,10 +66559,12 @@ const TeacherHQ = {
                 const label = item.status === "done" ? rpgT("hqDone")
                     : item.status === "overdue" ? rpgT("hqOverdue")
                         : item.status === "started" ? rpgT("hqStarted") : rpgT("hqPending");
+                // Показываем результат последней попытки (в том числе неудачной).
+                const attempt = item.result ? ` · ${hqNum(item.result.score)} · ${Math.round(Number(item.result.accuracy) || 0)}%` : "";
                 return `
                     <div class="hq-assign-row">
                         <span class="hq-assign-level">${escapeHtml(this.levelLabel(a.levelId))}</span>
-                        <span class="hq-status ${item.status}">${escapeHtml(label)}</span>
+                        <span class="hq-status ${item.status}">${escapeHtml(label)}${attempt}</span>
                         <span class="hq-assign-due">${a.dueAt ? escapeHtml(rpgDueLabel(a.dueAt)) : ""}</span>
                     </div>`;
             }).join("")
@@ -67639,6 +67793,16 @@ const AssignHQ = {
                 this.warn(rpgT("asPickClass"));
                 return false;
             }
+            if (w.mode === "class") {
+                // Назначение не создаётся, если среди выбранных классов нет учеников.
+                const total = this.classes()
+                    .filter(c => w.classIds.includes(c.id))
+                    .reduce((sum, c) => sum + ((c.students || []).length), 0);
+                if (!total) {
+                    this.warn(rpgT("asWizardNoStudents"));
+                    return false;
+                }
+            }
             if (w.mode === "solo" && !String(w.name || "").trim()) {
                 this.warn(rpgT("asNeedStudent"));
                 return false;
@@ -68198,19 +68362,28 @@ const AssignHQ = {
         if (!hash || hash.length < 3) return;
         if (hash.indexOf("#a=") === 0) {
             const payload = this.parseAssignLink(hash.slice(3));
-            if (payload) {
-                const result = this.attachFromLink(payload);
-                if (result.ok) {
-                    if (typeof showLevelSelect === "function") {
-                        showLevelSelect();
-                        if (typeof setLevelScreenTab === "function") setLevelScreenTab("assignments");
-                    }
-                    if (typeof RPG !== "undefined") {
-                        RPG.toast("📥", rpgT("asAttached"), asLevelLabel(result.levelId), "tier-gold");
-                    }
-                }
+            if (!payload) {
+                // Понятное сообщение вместо молчаливого отказа: ссылка повреждена.
+                this.warn(rpgT("asLinkBroken"));
                 this.clearHash();
+                return;
             }
+            const result = this.attachFromLink(payload);
+            if (result.ok) {
+                if (typeof showLevelSelect === "function") {
+                    showLevelSelect();
+                    if (typeof setLevelScreenTab === "function") setLevelScreenTab("assignments");
+                }
+                if (typeof RPG !== "undefined") {
+                    RPG.toast("📥", rpgT("asAttached"), asLevelLabel(result.levelId), "tier-gold");
+                }
+            } else if (result.reason === "lesson") {
+                // Пользовательский урок из ссылки не импортирован на это устройство.
+                this.warn(rpgT("asLessonMissing"));
+            } else {
+                this.warn(rpgT("asLinkBroken"));
+            }
+            this.clearHash();
             return;
         }
         if (hash.indexOf("#res=") === 0) {
@@ -68222,6 +68395,8 @@ const AssignHQ = {
                     if (typeof showScreen === "function") showScreen("teacher-screen");
                     if (typeof Teacher !== "undefined") Teacher.switchTab("class");
                     if (typeof RPG !== "undefined") RPG.toast("📥", rpgT("asResultImported"), "", "tier-gold");
+                } else {
+                    this.warn(rpgT("asResultBad"));
                 }
             } catch (e) { console.warn("res link", e); }
             this.clearHash();
@@ -68258,6 +68433,8 @@ const AssignHQ = {
         let levelId = null;
         if (/^c/i.test(payload.levelToken)) {
             levelId = TeacherHQ.resolveToken("K" + payload.levelToken.slice(1));
+            // Пользовательский урок не найден на этом устройстве.
+            if (levelId === null) return { ok: false, reason: "lesson" };
         } else {
             const n = parseInt(payload.levelToken, 10);
             if (Number.isFinite(n) && n > 0) levelId = n;
