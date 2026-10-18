@@ -406,6 +406,7 @@ html, body {
 .student-assignment-status { display: inline; margin: 5px 0 0; color: var(--text-dim); font-size: 12px; font-weight: 800; }
 .student-assignment-card.completed .student-assignment-status { color: var(--success); }
 .student-assignment-meta { display: inline; margin: 5px 0 0 4px; color: var(--text-dim); font-size: 12px; line-height: 1.45; overflow-wrap: anywhere; }
+.student-assignment-meta.assignment-item-result { display: block; margin-left: 0; color: var(--primary); font-weight: 600; }
 .student-assignment-card .btn { flex: 0 0 auto; white-space: normal; }
 #level-screen h2 {
     font-size: 36px;
@@ -4109,6 +4110,19 @@ body.rpg-in-game .notification { top: 214px; }
     padding: 2px 0;
 }
 .hq-hint { font-size: 12.5px; color: var(--text-dim); margin: 8px 0; }
+.hq-sync-note {
+    margin: 0 0 14px;
+    padding: 9px 12px;
+    border-left: 4px solid var(--primary);
+    border-radius: 0 9px 9px 0;
+    background: rgba(0, 184, 212, .08);
+    color: var(--text-dim);
+    font-size: 12px;
+    line-height: 1.5;
+}
+.hq-history-wrap { max-height: 360px; overflow: auto; border: 1px solid var(--border-light); border-radius: 9px; }
+.hq-history-wrap .hq-table { margin: 0; }
+.hq-history-wrap .hq-table th { position: sticky; top: 0; z-index: 1; }
 .hq-bridge textarea,
 #hq-remind-text,
 #hq-comment {
@@ -4673,6 +4687,7 @@ body.rpg-in-game .notification { top: 214px; }
 .as-field { display: flex; flex-direction: column; gap: 5px; margin-bottom: 12px; }
 .as-field > span { font-size: 12.5px; color: var(--text-dim); font-weight: 600; }
 .as-field input,
+.as-field select,
 .as-field textarea {
     border: 1px solid var(--border);
     border-radius: 10px;
@@ -4710,6 +4725,16 @@ body.rpg-in-game .notification { top: 214px; }
 .as-level:hover { background: var(--bg-card-hover); }
 .as-level.active { background: var(--primary); color: #fff; }
 .as-quick { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 12px; }
+.as-quick-form-note {
+    margin: -4px 0 14px;
+    padding: 10px 12px;
+    border-left: 4px solid var(--primary);
+    border-radius: 0 9px 9px 0;
+    background: rgba(0, 184, 212, .08);
+    color: var(--text-dim);
+    font-size: 12px;
+    line-height: 1.5;
+}
 
 .as-preview { display: flex; flex-direction: column; gap: 10px; }
 .as-preview > div {
@@ -51687,7 +51712,9 @@ const Storage = {
         const sameId = !!playerId && !!assignmentId && assignmentId === playerId;
         const sameCode = !!playerCode && ((!!assignmentCode && assignmentCode === playerCode) || assignmentId === playerCode);
         const sameName = !!name && !!assignment.studentName && this.normalizeName(assignment.studentName) === name;
-        return sameId || sameCode || sameName;
+        const conflictingId = !!playerId && !!assignmentId && assignmentId !== playerId;
+        const conflictingCode = !!playerCode && !!assignmentCode && assignmentCode !== playerCode;
+        return sameId || sameCode || (!conflictingId && !conflictingCode && sameName);
     },
 
     attachAssignmentCode(code) {
@@ -51766,12 +51793,15 @@ const Storage = {
             const sameId = !!assignment.playerId && !!r.playerId && String(r.playerId) === String(assignment.playerId);
             const samePlayerCode = !!assignment.studentCode && !!r.playerCode && String(r.playerCode).toUpperCase() === String(assignment.studentCode).toUpperCase();
             const sameName = !!assignment.studentName && this.normalizeName(r.name) === this.normalizeName(assignment.studentName);
+            const conflictingId = !!assignment.playerId && !!r.playerId && String(r.playerId) !== String(assignment.playerId);
+            const conflictingCode = !!assignment.studentCode && !!r.playerCode && String(r.playerCode).toUpperCase() !== String(assignment.studentCode).toUpperCase();
+            const samePerson = sameId || samePlayerCode || (!conflictingId && !conflictingCode && sameName);
             const sameCode = !!assignmentCode && assignmentCode === this.normalizeAssignmentCode(r.assignmentCode);
             // A code limits the result to this teacher's assignment. For an
             // individual assignment the code itself is enough; class rows still
-            // use name or ID so every passed student is shown separately.
+            // require a matching student identity (short code, ID, or safe name).
             const isClassRow = !!assignment.classId || !!assignment.className;
-            return sameCode ? (!isClassRow || sameId || samePlayerCode || sameName) : (sameId || samePlayerCode || sameName);
+            return sameCode ? (!isClassRow || samePerson) : samePerson;
         }) || null;
     },
 
@@ -55350,7 +55380,8 @@ function renderStudentAssignments() {
         return;
     }
     list.innerHTML = assignments.map(assignment => {
-        const completed = Storage.isAssignmentCompleted(assignment);
+        const result = Storage.getAssignmentResult(assignment);
+        const completed = !!result;
         const rawId = String(assignment.levelId);
         const target = escapeHtml(levelTitleText(assignment.levelId));
         const details = [
@@ -55358,11 +55389,15 @@ function renderStudentAssignments() {
             assignment.note ? `💬 ${escapeHtml(assignment.note)}` : `💬 ${I18n.t("assignmentNoNote")}`,
             formatRecordDate(assignment.assignedAt)
         ].filter(Boolean).join(" · ");
+        const resultLine = result
+            ? `<div class="student-assignment-meta assignment-item-result">${I18n.t("assignmentResult", result.score || 0, result.accuracy || 0)} · ${I18n.t("assignmentPassedAt", formatRecordDate(result.date))}</div>`
+            : "";
         return `<article class="student-assignment-card ${completed ? "completed" : ""}">
             <div class="student-assignment-main">
                 <div class="student-assignment-level">${target}</div>
                 <div class="student-assignment-status">${completed ? "✅ " + I18n.t("assignmentCompleted") : "🕘 " + I18n.t("assignmentPending")}</div>
                 <div class="student-assignment-meta">${details}</div>
+                ${resultLine}
             </div>
             <button type="button" class="btn btn-primary" data-student-assignment-start="${escapeHtml(rawId)}" data-student-assignment-code="${escapeHtml(assignment.assignmentCode || "")}">${I18n.t("openAssignment")}</button>
         </article>`;
@@ -57063,7 +57098,14 @@ Object.assign(UI.ru, {
     dueRemindToast: "Напоминание о назначении",
     dueRemindText: "{0} · {1}",
     /* --- E6: назначения 2.0 --- */
-    asNew: "+ Новое назначение",
+    asNew: "+ Подробное назначение",
+    asQuickLink: "📷 Быстро: QR / ссылка",
+    asQuickTitle: "Назначить урок по QR-коду",
+    asQuickHint: "Выберите класс и урок. После создания покажите QR-код или отправьте ссылку — у ученика урок сразу появится во вкладке «Назначенные уроки». Пользовательский урок сначала нужно импортировать на устройство ученика.",
+    asQuickChooseClass: "Выберите класс",
+    asQuickChooseLesson: "Выберите урок",
+    asQuickCreate: "Создать и открыть QR / ссылку",
+    asQuickNoStudents: "В этом классе пока нет учеников",
     asNewClass: "+ Класс",
     asTransfer: "⇅ Экспорт / импорт",
     asSearch: "Ученик, класс или код",
@@ -57264,7 +57306,14 @@ Object.assign(UI.en, {
     dueRemindToast: "Assignment reminder",
     dueRemindText: "{0} · {1} left",
     /* --- E6: назначения 2.0 --- */
-    asNew: "+ New assignment",
+    asNew: "+ Detailed assignment",
+    asQuickLink: "📷 Quick: QR / link",
+    asQuickTitle: "Assign a lesson with a QR code",
+    asQuickHint: "Choose a class and lesson. Show the QR code or send the link; the assignment will appear in the student's Assigned lessons tab. Custom lessons must be imported on the student's device first.",
+    asQuickChooseClass: "Choose a class",
+    asQuickChooseLesson: "Choose a lesson",
+    asQuickCreate: "Create and open QR / link",
+    asQuickNoStudents: "This class has no students yet",
     asNewClass: "+ Class",
     asTransfer: "⇅ Export / import",
     asSearch: "Student, class or code",
@@ -57466,7 +57515,14 @@ Object.assign(UI.kk, {
     dueRemindToast: "Тапсырма туралы еске салу",
     dueRemindText: "{0} · {1} қалды",
     /* --- E6: назначения 2.0 --- */
-    asNew: "+ Жаңа тағайындау",
+    asNew: "+ Толық тағайындау",
+    asQuickLink: "📷 Жылдам: QR / сілтеме",
+    asQuickTitle: "QR код арқылы сабақ тағайындау",
+    asQuickHint: "Сынып пен сабақты таңдаңыз. QR кодын көрсетіңіз немесе сілтемені жіберіңіз — сабақ оқушының «Тағайындалған сабақтар» бөлімінде көрінеді. Пайдаланушы жасаған сабақты алдымен оқушының құрылғысына импорттау қажет.",
+    asQuickChooseClass: "Сыныпты таңдаңыз",
+    asQuickChooseLesson: "Сабақты таңдаңыз",
+    asQuickCreate: "Жасау және QR / сілтемені ашу",
+    asQuickNoStudents: "Бұл сыныпта әзірге оқушы жоқ",
     asNewClass: "+ Сынып",
     asTransfer: "⇅ Экспорт / импорт",
     asSearch: "Оқушы, сынып немесе код",
@@ -58015,7 +58071,8 @@ Object.assign(UI.ru, {
     hqYesterday: "вчера",
     hqDaysAgo: "{0} дн. назад",
     hqImportTitle: "Добавить результаты учеников",
-    hqImportHint: "Вставьте коды результатов — по одному в строке. Дубликаты отсекаются автоматически.",
+    hqSyncNote: "На этом устройстве история игр подтягивается автоматически. С других устройств ученик передаёт файл «Отчёт для учителя» или коды результатов; короткий код из профиля связывает попытки с учеником.",
+    hqImportHint: "Для всех игр ученика проще загрузить один JSON-файл «Отчёт для учителя». Также можно вставить коды — по одному в строке; повторы отсекаются.",
     hqImportBtn: "Добавить коды",
     hqImportFile: "⬆ Файл отчёта",
     hqImportLocal: "С этого устройства",
@@ -58045,7 +58102,7 @@ Object.assign(UI.ru, {
     hqNoAssignments: "Назначений нет",
     hqNoHistory: "Попыток пока нет",
     hqStudentAssignments: "Назначения",
-    hqHistory: "Последние попытки",
+    hqHistory: "Все попытки",
     hqLastActivity: "Последняя активность",
     hqAccuracy7: "Точность 7 дней",
     hqAccuracy30: "Точность 30 дней",
@@ -58144,7 +58201,8 @@ Object.assign(UI.en, {
     hqYesterday: "yesterday",
     hqDaysAgo: "{0} days ago",
     hqImportTitle: "Add student results",
-    hqImportHint: "Paste result codes, one per line. Duplicates are skipped automatically.",
+    hqSyncNote: "Game history on this device is imported automatically. For other devices, students send the “Report for the teacher” file or result codes; the profile code links attempts to each student.",
+    hqImportHint: "To import all of a student's games, upload one JSON “Report for the teacher” file. You can also paste result codes, one per line; duplicates are skipped.",
     hqImportBtn: "Add codes",
     hqImportFile: "⬆ Report file",
     hqImportLocal: "From this device",
@@ -58174,7 +58232,7 @@ Object.assign(UI.en, {
     hqNoAssignments: "No assignments",
     hqNoHistory: "No attempts yet",
     hqStudentAssignments: "Assignments",
-    hqHistory: "Recent attempts",
+    hqHistory: "All attempts",
     hqLastActivity: "Last activity",
     hqAccuracy7: "Accuracy 7 days",
     hqAccuracy30: "Accuracy 30 days",
@@ -58273,7 +58331,8 @@ Object.assign(UI.kk, {
     hqYesterday: "кеше",
     hqDaysAgo: "{0} күн бұрын",
     hqImportTitle: "Оқушылардың нәтижелерін қосу",
-    hqImportHint: "Нәтиже кодтарын әр жолға біреу етіп қойыңыз. Қайталанулар автоматты түрде алынып тасталады.",
+    hqSyncNote: "Бұл құрылғыдағы ойын тарихы автоматты түрде қосылады. Басқа құрылғылардан оқушы «Мұғалімге есеп» файлын немесе нәтиже кодтарын жібереді; профильдегі қысқа код әрекеттерді оқушымен байланыстырады.",
+    hqImportHint: "Оқушының барлық ойындарын қосу үшін бір JSON «Мұғалімге есеп» файлын жүктеңіз. Кодтарды да әр жолға бір-бірден қоюға болады; қайталанулар алынып тасталады.",
     hqImportBtn: "Кодтарды қосу",
     hqImportFile: "⬆ Есеп файлы",
     hqImportLocal: "Осы құрылғыдан",
@@ -58303,7 +58362,7 @@ Object.assign(UI.kk, {
     hqNoAssignments: "Тағайындау жоқ",
     hqNoHistory: "Әрекеттер жоқ",
     hqStudentAssignments: "Тағайындаулар",
-    hqHistory: "Соңғы әрекеттер",
+    hqHistory: "Барлық әрекеттер",
     hqLastActivity: "Соңғы белсенділік",
     hqAccuracy7: "7 күндік дәлдік",
     hqAccuracy30: "30 күндік дәлдік",
@@ -65001,7 +65060,7 @@ const RPG_HQ_KEYS = {
 
 const RPG_HQ_ALPH = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const RPG_HQ_DAY = 24 * 60 * 60 * 1000;
-const RPG_HQ_CODE_RE = /R1-[A-Z0-9]+-[A-Z0-9]+-[A-Z0-9]+-[VD]-\d{1,3}-\d{1,3}-\d{1,5}-\d{6}-[A-Z0-9]{4}/;
+const RPG_HQ_CODE_RE = /R1-[A-Z0-9]+-[A-Z0-9]+-[A-Z0-9]+-[VD]-\d{1,3}-\d{1,3}-\d{1,5}-\d{6}(?:-G[A-Z0-9]{5})?-[A-Z0-9]{4}/;
 
 /* ---------------- МЕЛКИЕ УТИЛИТЫ ---------------- */
 
@@ -65200,6 +65259,7 @@ const TeacherHQ = {
                     <button type="button" data-hq-action="period" data-days="0" data-hq-key="hqPeriodAll">${escapeHtml(rpgT("hqPeriodAll"))}</button>
                 </div>
             </div>
+            <p class="hq-sync-note" data-hq-key="hqSyncNote">${escapeHtml(rpgT("hqSyncNote"))}</p>
             <div id="hq-body"></div>`;
     },
 
@@ -65323,6 +65383,29 @@ const TeacherHQ = {
         this.render();
     },
 
+    localHistorySignature() {
+        const history = Storage.getHistory() || [];
+        if (!history.length) return "empty";
+        const signature = history.map(row => [
+            row && row.id || "",
+            row && row.date || "",
+            row && row.score || 0,
+            row && row.playerCode || ""
+        ].join(":")).join("|");
+        return hqHash(signature, 8);
+    },
+
+    syncLocalHistory() {
+        const signature = this.localHistorySignature();
+        if (signature === this._localHistorySignature) return null;
+        this._localHistorySignature = signature;
+        const previousImport = this.lastImport;
+        let result = null;
+        try { result = this.importLocalHistory(); } catch (e) { console.warn("HQ local history", e); }
+        this.lastImport = previousImport;
+        return result;
+    },
+
     /* ---------- УРОВНИ И ТЕМЫ ---------- */
 
     levelToken(levelId) {
@@ -65410,7 +65493,12 @@ const TeacherHQ = {
         const attempted = Math.max(solved, Math.min(999, Math.round(hqNum(entry.attempted))));
         const score = Math.max(0, Math.min(99999, Math.round(hqNum(entry.score))));
         const date = hqDateToken(entry.date);
-        const payload = ["R1", studentCode, nameHash, lvl, win, solved, attempted, score, date].join("-");
+        // Include a stable per-run token so two identical games on the same day
+        // remain distinct in the teacher's complete history.
+        const runToken = entry.runToken || (entry.runId ? "G" + hqHash(entry.runId, 5) : "");
+        const payloadParts = ["R1", studentCode, nameHash, lvl, win, solved, attempted, score, date];
+        if (runToken) payloadParts.push(runToken);
+        const payload = payloadParts.join("-");
         return payload + "-" + hqHash(payload, 4);
     },
 
@@ -65420,9 +65508,10 @@ const TeacherHQ = {
         if (!match) return { ok: false, raw: String(raw || ""), reason: "format" };
         const code = match[0];
         const parts = code.split("-");
-        if (parts.length !== 10) return { ok: false, raw: code, reason: "format" };
-        const payload = parts.slice(0, 9).join("-");
-        const check = parts[9];
+        const hasRunToken = parts.length === 11 && /^G[A-Z0-9]{5}$/.test(parts[9]);
+        if (parts.length !== 10 && !hasRunToken) return { ok: false, raw: code, reason: "format" };
+        const payload = parts.slice(0, -1).join("-");
+        const check = parts[parts.length - 1];
         if (hqHash(payload, 4) !== check) return { ok: false, raw: code, reason: "checksum" };
         const entry = {
             code,
@@ -65433,7 +65522,8 @@ const TeacherHQ = {
             solved: parseInt(parts[5], 10) || 0,
             attempted: parseInt(parts[6], 10) || 0,
             score: parseInt(parts[7], 10) || 0,
-            date: hqFromDateToken(parts[8])
+            date: hqFromDateToken(parts[8]),
+            runToken: hasRunToken ? parts[9] : ""
         };
         entry.levelId = this.resolveToken(entry.levelToken);
         entry.accuracy = hqPct(entry.solved, entry.attempted);
@@ -65488,7 +65578,7 @@ const TeacherHQ = {
             added += 1;
         });
         list.sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")));
-        this.saveResults(list);
+        if (added) this.saveResults(list);
         return { added, dup };
     },
 
@@ -65514,15 +65604,18 @@ const TeacherHQ = {
         if (levelId === undefined || levelId === null || levelId === "") return null;
         const nested = player || {};
         const entry = {
-            studentCode: String(nested.code || nested.playerCode || record.playerCode || "").toUpperCase(),
-            nameHash: hqNameHash(nested.name || record.name || ""),
+            studentCode: String(record.playerCode || nested.code || nested.playerCode || "").toUpperCase(),
+            // The name stored with that run is stable even if the profile is renamed later.
+            nameHash: hqNameHash(record.name || nested.name || ""),
             levelToken: this.levelToken(levelId),
             levelId: levelId,
             victory: !!record.victory,
             solved: record.tasksSolved,
             attempted: record.tasksAttempted,
             score: record.score,
-            date: record.date || new Date().toISOString()
+            date: record.date || new Date().toISOString(),
+            runId: record.id || "",
+            assignmentCode: record.assignmentCode || ""
         };
         entry.code = this.buildCode(entry);
         return entry;
@@ -65585,7 +65678,9 @@ const TeacherHQ = {
                 tasksTotal: row.tasksTotal,
                 date: row.date,
                 playerCode: row.playerCode,
-                name: row.name
+                name: row.name,
+                id: row.id,
+                assignmentCode: row.assignmentCode
             }))
         };
         const name = "physics-quest-report-" + (settings.playerCode || "player") + "-" + hqFileDate() + ".json";
@@ -65833,6 +65928,7 @@ const TeacherHQ = {
     render(quiet) {
         const body = document.getElementById("hq-body");
         if (!body) return;
+        this.syncLocalHistory();
         const view = this.view();
         this.renderClassChips(view);
         this.renderPeriod(view);
@@ -66320,7 +66416,7 @@ const TeacherHQ = {
             }).join("")
             : `<div class="hq-empty-mini">${escapeHtml(rpgT("hqNoAssignments"))}</div>`;
 
-        const historyRows = row.results.slice(0, 10).map(r => `
+        const historyRows = row.results.map(r => `
             <tr>
                 <td>${escapeHtml(this.shortDate(r.date))}</td>
                 <td>${escapeHtml(this.shortLevel(r))}</td>
@@ -66357,13 +66453,13 @@ const TeacherHQ = {
             </div>
             <div class="hq-sc-block">
                 <h4>${escapeHtml(rpgT("hqHistory"))}</h4>
-                ${historyRows ? `<table class="hq-table"><thead><tr>
+                ${historyRows ? `<div class="hq-history-wrap"><table class="hq-table"><thead><tr>
                     <th>${escapeHtml(rpgT("hqDate"))}</th>
                     <th>${escapeHtml(rpgT("hqLevel"))}</th>
                     <th>${escapeHtml(rpgT("hqWin"))}</th>
                     <th>${escapeHtml(rpgT("hqScore"))}</th>
                     <th>${escapeHtml(rpgT("hqAccuracyShort"))}</th>
-                </tr></thead><tbody>${historyRows}</tbody></table>` : `<div class="hq-empty-mini">${escapeHtml(rpgT("hqNoHistory"))}</div>`}
+                </tr></thead><tbody>${historyRows}</tbody></table></div>` : `<div class="hq-empty-mini">${escapeHtml(rpgT("hqNoHistory"))}</div>`}
             </div>
             <div class="hq-sc-block">
                 <h4>${escapeHtml(rpgT("hqComment"))}</h4>
@@ -66700,18 +66796,32 @@ const TeacherHQ = {
         if (old) old.remove();
         let settings = {};
         try { settings = Storage.getSettings() || {}; } catch (e) {}
+        const history = Storage.getHistory() || [];
+        const activeAssignmentCode = Storage.normalizeAssignmentCode(Game.activeAssignmentCode || "");
+        const run = history.slice().reverse().find(row =>
+            String(row.level !== undefined ? row.level : row.levelId) === String(summary.levelId)
+            && !!row.victory === !!victory
+            && Math.round(hqNum(row.score)) === Math.round(hqNum(summary.score))
+            && Math.round(hqNum(row.tasksSolved)) === Math.round(hqNum(summary.solved))
+            && Math.round(hqNum(row.tasksAttempted)) === Math.round(hqNum(summary.attempted))
+            && (!activeAssignmentCode || Storage.normalizeAssignmentCode(row.assignmentCode) === activeAssignmentCode)
+        );
         const entry = {
-            studentCode: settings.playerCode || "",
-            name: settings.playerName || "",
+            studentCode: (run && run.playerCode) || settings.playerCode || "",
+            name: (run && run.name) || settings.playerName || "",
             levelId: summary.levelId,
             victory: !!victory,
             solved: summary.solved,
             attempted: summary.attempted,
             score: summary.score,
-            date: new Date().toISOString()
+            date: (run && run.date) || new Date().toISOString(),
+            runId: run && run.id || "",
+            assignmentCode: (run && run.assignmentCode) || activeAssignmentCode || ""
         };
         let code = "";
         try { code = this.buildCode(entry); } catch (e) { return; }
+        entry.code = code;
+        this.addResults([entry]);
         const block = document.createElement("div");
         block.className = "hq-result-code";
         block.innerHTML = `
@@ -66836,6 +66946,7 @@ const AssignHQ = {
     filters: { search: "", classId: "all", status: "all", archive: false, sort: "due" },
     expanded: {},
     wizard: null,
+    quickLink: null,
 
     /* ---------- УСТАНОВКА ---------- */
 
@@ -66879,7 +66990,8 @@ const AssignHQ = {
         shell.className = "as-shell";
         shell.innerHTML = `
             <div class="as-toolbar">
-                <button type="button" class="btn btn-primary" data-as-action="wizard">${escapeHtml(rpgT("asNew"))}</button>
+                <button type="button" class="btn btn-primary" data-as-action="quick-link">${escapeHtml(rpgT("asQuickLink"))}</button>
+                <button type="button" class="btn btn-secondary" data-as-action="wizard">${escapeHtml(rpgT("asNew"))}</button>
                 <button type="button" class="btn btn-secondary" data-as-action="new-class">${escapeHtml(rpgT("asNewClass"))}</button>
                 <button type="button" class="btn btn-secondary" data-as-action="transfer">${escapeHtml(rpgT("asTransfer"))}</button>
             </div>
@@ -66934,6 +67046,7 @@ const AssignHQ = {
             if (t.id === "as-wiz-name") { this.wizard.name = t.value; return; }
             if (t.id === "as-wiz-code") { this.wizard.code = t.value; return; }
             if (t.id === "as-wiz-note") { this.wizard.note = t.value; return; }
+            if (this.quickLink && t.id === "as-quick-note") { this.quickLink.note = t.value; return; }
             if (t.id === "as-wiz-search") {
                 this.wizard.search = t.value;
                 this.renderLevelList();
@@ -66949,6 +67062,9 @@ const AssignHQ = {
                 this.wizard.due = String(t.value || "");
                 this.renderWizard();
             }
+            if (t.id === "as-quick-class" && this.quickLink) this.quickLink.classId = t.value;
+            if (t.id === "as-quick-level" && this.quickLink) this.quickLink.levelId = t.value;
+            if (t.id === "as-quick-due" && this.quickLink) this.quickLink.due = String(t.value || "");
             if (t.id === "as-file") {
                 const file = t.files && t.files[0];
                 if (file) {
@@ -66988,6 +67104,8 @@ const AssignHQ = {
         const tab = document.querySelector("#tab-assignments .as-shell");
         if (!tab) return;
         const shell = tab;
+        const quickLink = shell.querySelector('[data-as-action="quick-link"]');
+        if (quickLink) quickLink.textContent = rpgT("asQuickLink");
         const wizard = shell.querySelector('[data-as-action="wizard"]');
         if (wizard) wizard.textContent = rpgT("asNew");
         shell.querySelectorAll('[data-as-action="new-class"]').forEach(el => { el.textContent = rpgT("asNewClass"); });
@@ -66999,6 +67117,7 @@ const AssignHQ = {
         if (arch) arch.textContent = rpgT("asArchived");
         const legacySummary = shell.parentElement?.querySelector(".as-legacy summary");
         if (legacySummary) legacySummary.textContent = rpgT("asLegacy");
+        if (this.quickLink && !document.getElementById("as-modal")?.hidden) this.renderQuickLink();
         this.refresh();
     },
 
@@ -67245,6 +67364,12 @@ const AssignHQ = {
     action(name, target, event) {
         const key = target.getAttribute("data-key") || "";
         switch (name) {
+            case "quick-link":
+                this.openQuickLink();
+                break;
+            case "quick-create":
+                this.createQuickLink();
+                break;
             case "wizard":
                 this.openWizard();
                 break;
@@ -67399,6 +67524,102 @@ const AssignHQ = {
     close() {
         const modal = document.getElementById("as-modal");
         if (modal) modal.hidden = true;
+        this.quickLink = null;
+    },
+
+    openQuickLink() {
+        const classes = this.classes();
+        if (!classes.length) {
+            this.warn(rpgT("asPickClass"));
+            this.openClassModal("");
+            return;
+        }
+        const levels = asLevelOptions();
+        this.quickLink = {
+            classId: classes[0].id,
+            levelId: levels.length ? levels[0].value : "",
+            due: "",
+            note: ""
+        };
+        const modal = document.getElementById("as-modal");
+        if (!modal) return;
+        modal.hidden = false;
+        this.renderQuickLink();
+    },
+
+    renderQuickLink() {
+        const body = document.getElementById("as-modal-body");
+        if (!body || !this.quickLink) return;
+        const quick = this.quickLink;
+        const classes = this.classes();
+        const levels = asLevelOptions();
+        if (!classes.some(cls => cls.id === quick.classId)) quick.classId = classes.length ? classes[0].id : "";
+        if (!levels.some(level => level.value === quick.levelId)) quick.levelId = levels.length ? levels[0].value : "";
+        body.innerHTML = `
+            <h2>${escapeHtml(rpgT("asQuickTitle"))}</h2>
+            <p class="as-quick-form-note">${escapeHtml(rpgT("asQuickHint"))}</p>
+            <label class="as-field"><span>${escapeHtml(rpgT("asQuickChooseClass"))}</span>
+                <select id="as-quick-class">${classes.map(cls => `<option value="${asAttr(cls.id)}"${cls.id === quick.classId ? " selected" : ""}>${asEscape(cls.name)} · ${(cls.students || []).length} ${escapeHtml(rpgT("asPeople"))}</option>`).join("")}</select>
+            </label>
+            <label class="as-field"><span>${escapeHtml(rpgT("asQuickChooseLesson"))}</span>
+                <select id="as-quick-level">${levels.map(level => `<option value="${asAttr(level.value)}"${level.value === quick.levelId ? " selected" : ""}>${asEscape(level.label)}</option>`).join("")}</select>
+            </label>
+            <label class="as-field"><span>${escapeHtml(rpgT("asDue"))}</span>
+                <input type="date" id="as-quick-due" value="${asAttr(quick.due)}">
+            </label>
+            <label class="as-field"><span>${escapeHtml(rpgT("asNote"))}</span>
+                <input type="text" id="as-quick-note" maxlength="160" value="${asAttr(quick.note)}" placeholder="${escapeHtml(rpgT("asNotePh"))}">
+            </label>
+            <div class="as-wiz-foot">
+                <button type="button" class="btn btn-secondary" data-as-action="close">${escapeHtml(rpgT("asCancel"))}</button>
+                <button type="button" class="btn btn-primary" data-as-action="quick-create">${escapeHtml(rpgT("asQuickCreate"))}</button>
+            </div>`;
+    },
+
+    createQuickLink() {
+        const quick = this.quickLink;
+        if (!quick) return;
+        const cls = this.classes().find(item => item.id === quick.classId);
+        if (!cls) {
+            this.warn(rpgT("asPickClass"));
+            return;
+        }
+        if (!quick.levelId) {
+            this.warn(rpgT("asPickLevel"));
+            return;
+        }
+        const students = Array.isArray(cls.students) ? cls.students : [];
+        if (!students.length) {
+            this.warn(rpgT("asQuickNoStudents"));
+            return;
+        }
+        const levelId = String(quick.levelId).indexOf("custom:") === 0 ? quick.levelId : parseInt(quick.levelId, 10);
+        const assignmentCode = Storage.makeAssignmentCode(levelId);
+        const assignedAt = new Date().toISOString();
+        const dueAt = asDueIso(quick.due);
+        const loadedAssignments = Storage.load(Storage.KEYS.ASSIGNMENTS, []);
+        const list = Array.isArray(loadedAssignments) ? loadedAssignments : [];
+        students.forEach(student => list.push({
+            id: Storage.makeId("assignment"),
+            studentName: String(student.name || "").trim(),
+            playerId: String(student.playerId || "").trim(),
+            studentCode: String(student.studentCode || student.playerCode || student.playerId || "").trim().toUpperCase(),
+            levelId,
+            assignmentCode,
+            note: String(quick.note || "").trim(),
+            classId: cls.id,
+            className: cls.name,
+            assignedAt,
+            createdVia: "quick-link",
+            ...(dueAt ? { dueAt } : {})
+        }));
+        Storage.save(Storage.KEYS.ASSIGNMENTS, list);
+        this.close();
+        this.refresh();
+        try { Teacher.renderAssignments(); } catch (e) {}
+        try { TeacherHQ.render(); } catch (e) {}
+        const batch = this.batches().find(item => item.code === assignmentCode);
+        if (batch) this.openQr(batch);
     },
 
     wizardStep(delta) {
@@ -67980,7 +68201,10 @@ const AssignHQ = {
             if (payload) {
                 const result = this.attachFromLink(payload);
                 if (result.ok) {
-                    if (typeof showLevelSelect === "function") showLevelSelect();
+                    if (typeof showLevelSelect === "function") {
+                        showLevelSelect();
+                        if (typeof setLevelScreenTab === "function") setLevelScreenTab("assignments");
+                    }
                     if (typeof RPG !== "undefined") {
                         RPG.toast("📥", rpgT("asAttached"), asLevelLabel(result.levelId), "tier-gold");
                     }
@@ -68025,7 +68249,11 @@ const AssignHQ = {
 
     attachFromLink(payload) {
         const assignments = Storage.getAssignments() || [];
-        const existing = assignments.find(a => String(a.assignmentCode).toUpperCase() === payload.code);
+        const currentPlayer = Storage.getCurrentPlayer();
+        const existing = assignments.find(a =>
+            String(a.assignmentCode).toUpperCase() === payload.code
+            && Storage.assignmentMatchesPlayer(a, currentPlayer)
+        );
         if (existing) return { ok: true, existing: true, levelId: existing.levelId };
         let levelId = null;
         if (/^c/i.test(payload.levelToken)) {
